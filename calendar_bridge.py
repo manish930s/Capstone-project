@@ -104,6 +104,62 @@ def add_study_block(summary: str, description: str, start_iso: str, end_iso: str
     }
 
 
+def list_events(time_min_iso: str, time_max_iso: str, max_results: int = 10) -> dict:
+    """
+    List events within a time range.
+    """
+    service = build_calendar_service()
+    
+    events_result = service.events().list(
+        calendarId='primary', 
+        timeMin=time_min_iso,
+        timeMax=time_max_iso,
+        maxResults=max_results, 
+        singleEvents=True,
+        orderBy='startTime'
+    ).execute()
+    
+    events = events_result.get('items', [])
+    
+    return {
+        "ok": True,
+        "events": events
+    }
+
+
+def update_event(event_id: str, summary: str = None, description: str = None, start_iso: str = None, end_iso: str = None) -> dict:
+    """
+    Update an existing event.
+    """
+    service = build_calendar_service()
+    
+    # First get the existing event to preserve fields we aren't changing
+    try:
+        event = service.events().get(calendarId='primary', eventId=event_id).execute()
+    except Exception as e:
+        return {"ok": False, "error": f"Event not found: {str(e)}"}
+
+    if summary:
+        event['summary'] = summary
+    if description:
+        event['description'] = description
+    if start_iso:
+        event['start'] = {'dateTime': start_iso, 'timeZone': DEFAULT_TZ}
+    if end_iso:
+        event['end'] = {'dateTime': end_iso, 'timeZone': DEFAULT_TZ}
+
+    updated_event = service.events().update(calendarId='primary', eventId=event_id, body=event).execute()
+
+    return {
+        "ok": True,
+        "eventId": updated_event.get("id"),
+        "htmlLink": updated_event.get("htmlLink"),
+        "summary": updated_event.get("summary"),
+        "start": updated_event.get("start"),
+        "end": updated_event.get("end"),
+    }
+
+
 # ============== FLASK APP ==============
 
 app = Flask(__name__)
@@ -152,6 +208,51 @@ def create_event():
 
     except Exception as e:
         # Make error visible to the caller (agent_app.py)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/list_events", methods=["GET"])
+def list_events_endpoint():
+    """
+    HTTP endpoint to list events.
+    Query params: timeMin, timeMax, maxResults
+    """
+    try:
+        time_min = request.args.get("timeMin")
+        time_max = request.args.get("timeMax")
+        max_results = int(request.args.get("maxResults", 10))
+        
+        if not time_min or not time_max:
+             return jsonify({"ok": False, "error": "Missing timeMin or timeMax"}), 400
+
+        result = list_events(time_min, time_max, max_results)
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/update_event", methods=["POST"])
+def update_event_endpoint():
+    """
+    HTTP endpoint to update an event.
+    JSON body: {eventId, summary, description, start, end}
+    """
+    try:
+        data = request.get_json(force=True) or {}
+        event_id = data.get("eventId")
+        
+        if not event_id:
+            return jsonify({"ok": False, "error": "Missing eventId"}), 400
+            
+        result = update_event(
+            event_id,
+            summary=data.get("summary"),
+            description=data.get("description"),
+            start_iso=data.get("start"),
+            end_iso=data.get("end")
+        )
+        return jsonify(result), 200
+    except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
