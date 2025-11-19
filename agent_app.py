@@ -6,9 +6,13 @@ import re
 import google.generativeai as genai
 from google.generativeai import types as genai_types
 from dotenv import load_dotenv
+from werkzeug.utils import secure_filename
+import pypdf
 
 load_dotenv()
 
+# ========================
+# CONFIGURATION
 # ========================
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -16,11 +20,69 @@ if not GOOGLE_API_KEY:
     raise RuntimeError("Please set the GOOGLE_API_KEY environment variable first.")
 
 genai.configure(api_key=GOOGLE_API_KEY)
-MODEL_NAME = "gemini-2.0-flash"   # or "gemini-2.5-flash-lite" if enabled
+MODEL_NAME = "gemini-2.0-flash"
 model = genai.GenerativeModel(MODEL_NAME)
 
 # URL of your local Flask bridge (no Cloudflare)
 CALENDAR_BRIDGE_URL = "http://127.0.0.1:5001/create_event"
+
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'md'}
+
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+# ========================
+# RAG & TEXT PROCESSING
+# ========================
+
+class SimpleRAG:
+    def __init__(self):
+        self.documents = {}  # filename -> text content
+
+    def add_document(self, filename, text):
+        self.documents[filename] = text
+
+    def retrieve_context(self, query):
+        # Check if query is a filename in our documents
+        if query in self.documents:
+            # Return the full document content for quiz generation
+            return self.documents[query]
+        
+        # Otherwise, do keyword matching for RAG search
+        relevant_chunks = []
+        query_lower = query.lower()
+        
+        for filename, text in self.documents.items():
+            # Split into rough chunks (paragraphs)
+            paragraphs = text.split('\n\n')
+            for p in paragraphs:
+                if any(word in p.lower() for word in query_lower.split() if len(word) > 4):
+                    relevant_chunks.append(f"[Source: {filename}]\n{p.strip()}")
+        
+        # Return top 3 chunks
+        return "\n\n".join(relevant_chunks[:3]) if relevant_chunks else None
+
+
+rag_system = SimpleRAG()
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def extract_text_from_file(filepath):
+    ext = filepath.rsplit('.', 1)[1].lower()
+    text = ""
+    try:
+        if ext == 'pdf':
+            reader = pypdf.PdfReader(filepath)
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+        else:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                text = f.read()
+    except Exception as e:
+        print(f"Error reading file {filepath}: {e}")
+    return text
 
 # ========================
 # Timezone helpers
@@ -29,14 +91,10 @@ CALENDAR_BRIDGE_URL = "http://127.0.0.1:5001/create_event"
 def get_ist_tz() -> dt.tzinfo:
     """
     Safely get Asia/Kolkata timezone.
-
-    - Tries ZoneInfo('Asia/Kolkata')
-    - If tzdata is missing, falls back to fixed +05:30 offset
     """
     try:
         return ZoneInfo("Asia/Kolkata")
     except Exception:
-        # No tzdata on this system – use fixed IST offset (good enough, no DST).
         return dt.timezone(dt.timedelta(hours=5, minutes=30))
 
 
@@ -46,10 +104,7 @@ def get_ist_tz() -> dt.tzinfo:
 
 def get_current_datetime(timezone: str = "Asia/Kolkata") -> dict:
     """
-    Returns current date/time so we can:
-    - know today's date
-    - answer "what is today"
-    - interpret "tomorrow", etc.
+    Returns current date/time.
     """
     if timezone == "Asia/Kolkata":
         tz = get_ist_tz()
@@ -73,13 +128,7 @@ def get_current_datetime(timezone: str = "Asia/Kolkata") -> dict:
 
 def create_calendar_event(summary: str, description: str, start_iso: str, end_iso: str) -> dict:
     """
-    Call your local calendar_bridge.py server (Flask) to create an event.
-
-    Args:
-        summary: event title
-        description: event description
-        start_iso: ISO 8601 string (with timezone)
-        end_iso: ISO 8601 string
+    Call local calendar_bridge.py server (Flask) to create an event.
     """
     payload = {
         "summary": summary,
@@ -90,16 +139,10 @@ def create_calendar_event(summary: str, description: str, start_iso: str, end_is
 
     try:
         resp = requests.post(CALENDAR_BRIDGE_URL, json=payload, timeout=10)
-        print("[DEBUG] Calendar bridge status:", resp.status_code)
-        print("[DEBUG] Calendar bridge body  :", resp.text)
-
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
-        return {
-            "ok": False,
-            "error": str(e),
-        }
+        return {"ok": False, "error": str(e)}
 
 
 def list_calendar_events(time_min_iso: str, time_max_iso: str, max_results: int = 10) -> dict:
@@ -112,7 +155,6 @@ def list_calendar_events(time_min_iso: str, time_max_iso: str, max_results: int 
         "maxResults": max_results
     }
     try:
-        # Construct URL for GET request
         url = CALENDAR_BRIDGE_URL.replace("/create_event", "/list_events")
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
@@ -133,8 +175,21 @@ def update_calendar_event(event_id: str, summary: str = None, description: str =
         "end": end_iso
     }
     try:
-        # Construct URL for POST request
         url = CALENDAR_BRIDGE_URL.replace("/create_event", "/update_event")
+        resp = requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def delete_calendar_event(event_id: str) -> dict:
+    """
+    Call local calendar_bridge to delete an event.
+    """
+    payload = {"eventId": event_id}
+    try:
+        url = CALENDAR_BRIDGE_URL.replace("/create_event", "/delete_event")
         resp = requests.post(url, json=payload, timeout=10)
         resp.raise_for_status()
         return resp.json()
@@ -149,25 +204,14 @@ def update_calendar_event(event_id: str, summary: str = None, description: str =
 def auto_create_tomorrow_event(user_message: str, today_info: dict) -> dict | None:
     """
     Very simple 'direct save' helper.
-
-    If user says things like:
-      "i want to save reminder for DSA task tomorrow at 11pm"
-
-    We:
-      - detect "tomorrow"
-      - parse "11pm"
-      - build IST datetimes for tomorrow 23:00–23:30
-      - call create_calendar_event()
     """
     text = user_message.lower()
 
     if "tomorrow" not in text:
         return None
 
-    # find time like '11pm', '7 am', '07:30pm'
     m = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)", text)
     if not m:
-        # no recognizable time – let manual flow handle it
         return None
 
     hour = int(m.group(1))
@@ -179,16 +223,13 @@ def auto_create_tomorrow_event(user_message: str, today_info: dict) -> dict | No
     if ampm == "am" and hour == 12:
         hour = 0
 
-    # figure out "tomorrow" date from today's date
-    # today_info['date'] is "YYYY-MM-DD"
     today_date = dt.datetime.fromisoformat(today_info["date"] + "T00:00:00")
     ist = get_ist_tz()
     today_date = today_date.replace(tzinfo=ist)
 
     start_dt = today_date + dt.timedelta(days=1, hours=hour, minutes=minute)
-    end_dt = start_dt + dt.timedelta(minutes=30)  # default 30-minute reminder
+    end_dt = start_dt + dt.timedelta(minutes=30)
 
-    # crude summary guess from text
     summary = "Reminder"
     if "dsa" in text:
         summary = "DSA Task Reminder"
@@ -218,10 +259,6 @@ def auto_create_tomorrow_event(user_message: str, today_info: dict) -> dict | No
 # Helper: ask Gemini
 # ========================
 
-# ========================
-# Helper: ask Gemini
-# ========================
-
 SYSTEM_PROMPT = """
 You are Manish's personal Study & Career Co-Pilot.
 
@@ -230,6 +267,7 @@ Capabilities:
 - You know how to reason about today's date and relative dates using the `get_current_datetime` tool.
 - You can create Google Calendar events via the `create_calendar_event` tool.
 - You can LIST events using `list_calendar_events` and UPDATE them using `update_calendar_event`.
+- You have access to uploaded documents (Context-Aware RAG). If [RAG CONTEXT] is provided, use it to answer the user's questions.
 
 VERY IMPORTANT:
 
@@ -251,11 +289,14 @@ VERY IMPORTANT:
        If the wrapper sets 'manual_calendar_flow' in [CONTEXT], then you should speak like
        a conversational wizard while Python collects the exact date/time from the user.
    
-   (C) Rescheduling / Updating (CRITICAL):
-       If the user wants to reschedule, you might need to ask for clarification first.
-       Once you are sure about the Event ID and the new Start/End times (in IST), you MUST output a JSON block at the end of your response to trigger the update.
+   (C) Rescheduling / Updating (CRITICAL) - "The Reshuffle Protocol":
+       If the user says "I missed yesterday's session" or wants to reschedule:
+       1. Check the [SYSTEM CONTEXT] for 'past_events' or 'upcoming_events'.
+       2. Identify the missed or relevant event.
+       3. Propose a new time based on the user's schedule (or ask for one).
+       4. Once you have the ID and the new time, output the JSON block to update it.
        
-       IMPORTANT: 'eventId' must be the actual Google Calendar ID string (e.g., "7vgnurdqdpe85km0ofnb061b08"), NOT the event title/summary.
+       IMPORTANT: 'eventId' must be the actual Google Calendar ID string.
        
        Format:
        ```json
@@ -288,209 +329,6 @@ VERY IMPORTANT:
              "description": "Variables, Data Types",
              "start_iso": "2025-11-20T10:00:00+05:30",
              "end_iso": "2025-11-20T11:30:00+05:30"
-           },
-           {
-             "summary": "NumPy Intro",
-             "description": "Basic arrays",
-             "start_iso": "2025-11-20T12:00:00+05:30",
-             "end_iso": "2025-11-20T13:00:00+05:30"
-           }
-         ]
-       }
-       ```
-
-4) You DO NOT directly call Python functions. They are already called outside and results are put in [CONTEXT]. 
-   EXCEPTION: For updating events or batch creating events, you use the JSON format above.
-"""
-
-
-def chat_with_agent(user_message: str, history: list[dict], context: dict | None = None) -> str:
-    """
-    Send a message to Gemini with history and extra context.
-    """
-    parts = []
-
-    # System prompt
-    parts.append(genai_types.Part(text=SYSTEM_PROMPT))
-
-    # Add context (like today's date, calendar results, etc.)
-    if context:
-        parts.append(
-            genai_types.Part(
-                text=f"[SYSTEM CONTEXT]\n{context}"
-            )
-        )
-
-    # Add History
-    # We'll format history as a transcript for the model to see previous turns
-    history_text = ""
-    for turn in history:
-        role = turn["role"]
-        content = turn["content"]
-        history_text += f"[{role.upper()}]: {content}\n"
-    
-    if history_text:
-        parts.append(genai_types.Part(text=f"[CONVERSATION HISTORY]\n{history_text}"))
-
-    # User message
-    parts.append(genai_types.Part(text=f"[USER]\n{user_message}"))
-
-    content = genai_types.Content(
-        role="user",
-        parts=parts
-    )
-
-    try:
-        resp = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=[content],
-        )
-
-        # Extract text
-        if resp.candidates and resp.candidates[0].content and resp.candidates[0].content.parts:
-            text = resp.candidates[0].content.parts[0].text
-            if text is not None:
-                return text.strip()
-    except Exception as e:
-        return f"(Error calling Gemini: {e})"
-
-    return "(No response from model)"
-
-    if "tomorrow" not in text:
-        return None
-
-    # find time like '11pm', '7 am', '07:30pm'
-    m = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)", text)
-    if not m:
-        # no recognizable time – let manual flow handle it
-        return None
-
-    hour = int(m.group(1))
-    minute = int(m.group(2) or "0")
-    ampm = m.group(3)
-
-    if ampm == "pm" and hour != 12:
-        hour += 12
-    if ampm == "am" and hour == 12:
-        hour = 0
-
-    # figure out "tomorrow" date from today's date
-    # today_info['date'] is "YYYY-MM-DD"
-    today_date = dt.datetime.fromisoformat(today_info["date"] + "T00:00:00")
-    ist = get_ist_tz()
-    today_date = today_date.replace(tzinfo=ist)
-
-    start_dt = today_date + dt.timedelta(days=1, hours=hour, minutes=minute)
-    end_dt = start_dt + dt.timedelta(minutes=30)  # default 30-minute reminder
-
-    # crude summary guess from text
-    summary = "Reminder"
-    if "dsa" in text:
-        summary = "DSA Task Reminder"
-    elif "gym" in text:
-        summary = "GYM"
-    elif "exam" in text:
-        summary = "Exam Prep"
-
-    description = user_message
-
-    calendar_result = create_calendar_event(
-        summary=summary,
-        description=description,
-        start_iso=start_dt.isoformat(),
-        end_iso=end_dt.isoformat(),
-    )
-
-    return {
-        "calendar_result": calendar_result,
-        "summary": summary,
-        "start_dt": start_dt,
-        "end_dt": end_dt,
-    }
-
-
-# ========================
-# Helper: ask Gemini
-# ========================
-
-# ========================
-# Helper: ask Gemini
-# ========================
-
-SYSTEM_PROMPT = """
-You are Manish's personal Study & Career Co-Pilot.
-
-Capabilities:
-- Help plan study, AI/ML learning, Kaggle competitions, MCA exam prep.
-- You know how to reason about today's date and relative dates using the `get_current_datetime` tool.
-- You can create Google Calendar events via the `create_calendar_event` tool.
-- You can LIST events using `list_calendar_events` and UPDATE them using `update_calendar_event`.
-
-VERY IMPORTANT:
-
-1) When the user asks for the current date/day:
-   - The wrapper passes today's date/time in [CONTEXT]. Use that to answer.
-
-2) When the user says things like:
-   - "tomorrow", "day after tomorrow", "next Monday", "this weekend"
-   - or specific dates like "20th Nov 2025"
-   you must interpret them into concrete datetimes in IST (Asia/Kolkata).
-
-3) There are THREE ways to interact with the calendar:
-
-   (A) Direct auto-save (Creation):
-       The Python wrapper may already have created an event and will pass details in [CONTEXT]
-       under 'auto_event_info'. In that case, just confirm what was done.
-
-   (B) Manual wizard (Creation):
-       If the wrapper sets 'manual_calendar_flow' in [CONTEXT], then you should speak like
-       a conversational wizard while Python collects the exact date/time from the user.
-   
-   (C) Rescheduling / Updating (CRITICAL):
-       1. Check the [SYSTEM CONTEXT] for 'upcoming_events'.
-       2. Find the event that matches the user's request (e.g. "Python Basics").
-       3. Use that event's 'id' as the 'eventId'.
-       4. DO NOT ASK THE USER FOR THE EVENT ID if it is available in the context.
-       5. Only ask for clarification on the NEW time if it's not clear.
-       6. Once you have the ID and the new time, output the JSON block.
-       
-       Format:
-       ```json
-       {
-         "action": "update_event",
-         "eventId": "EVENT_ID_HERE",
-         "start_iso": "2025-MM-DDTHH:MM:00+05:30",
-         "end_iso": "2025-MM-DDTHH:MM:00+05:30"
-       }
-       ```
-
-   (D) Batch Creation (Planning):
-       If the user asks you to "schedule this plan" or "save these events", and you have just generated a list of tasks/events with times, you can create them all at once.
-       Output a JSON block with action "create_events" (plural) and a list of events.
-       
-       IMPORTANT: If the plan has vague times like "Morning", "Afternoon", "Evening", YOU MUST INFER CONCRETE TIMES based on the user's preferences or defaults:
-       - Morning: 10:00 AM
-       - Afternoon: 2:00 PM
-       - Evening: 6:00 PM
-       
-       Do NOT ask the user for times again if they said "schedule it". Just pick reasonable defaults and generate the JSON.
-       
-       Format:
-       ```json
-       {
-         "action": "create_events",
-         "events": [
-           {
-             "summary": "Python Basics",
-             "description": "Variables, Data Types",
-             "start_iso": "2025-11-20T10:00:00+05:30",
-             "end_iso": "2025-11-20T11:30:00+05:30"
-           },
-           {
-             "summary": "NumPy Intro",
-             "description": "Basic arrays",
-             "start_iso": "2025-11-20T12:00:00+05:30",
-             "end_iso": "2025-11-20T13:00:00+05:30"
            }
          ]
        }
@@ -512,10 +350,14 @@ def chat_with_agent(user_message: str, history: list[dict], context: dict | None
 
     # Add context (like today's date, calendar results, etc.)
     if context:
-        parts.append({"text": f"[SYSTEM CONTEXT]\n{context}"})
+        context_str = f"[SYSTEM CONTEXT]\n{context}"
+        # Add RAG context if available
+        if context.get("rag_context"):
+            context_str += f"\n\n[RAG CONTEXT]\n{context['rag_context']}"
+            
+        parts.append({"text": context_str})
 
     # Add History
-    # We'll format history as a transcript for the model to see previous turns
     history_text = ""
     for turn in history:
         role = turn["role"]
@@ -528,12 +370,16 @@ def chat_with_agent(user_message: str, history: list[dict], context: dict | None
     # User message
     parts.append({"text": f"[USER]\n{user_message}"})
 
+    content = {
+        "role": "user",
+        "parts": parts
+    }
+
     try:
         resp = model.generate_content(
-            contents=[{"role": "user", "parts": parts}],
+            contents=[content],
         )
 
-        # Extract text
         if resp.candidates and resp.candidates[0].content and resp.candidates[0].content.parts:
             text = resp.candidates[0].content.parts[0].text
             if text is not None:
@@ -549,14 +395,58 @@ def chat_with_agent(user_message: str, history: list[dict], context: dict | None
 # ========================
 
 from flask import Flask, render_template, request, jsonify
+import uuid
+import json
 
 app = Flask(__name__)
-
-import uuid
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # Global sessions storage
-# Structure: { session_id: { 'title': str, 'history': list, 'created_at': datetime } }
 sessions = {}
+
+# Load existing files into RAG system on startup
+def load_existing_files():
+    """Load all existing files from uploads folder into RAG system"""
+    if os.path.exists(UPLOAD_FOLDER):
+        for filename in os.listdir(UPLOAD_FOLDER):
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            if os.path.isfile(filepath) and allowed_file(filename):
+                print(f"Loading {filename} into RAG system...")
+                text = extract_text_from_file(filepath)
+                if text:
+                    rag_system.add_document(filename, text)
+                    print(f"✓ Loaded {filename} ({len(text)} chars)")
+                else:
+                    print(f"✗ Failed to extract text from {filename}")
+
+# Load files on startup
+load_existing_files()
+
+@app.route("/upload", methods=["POST"])
+def upload_endpoint():
+    """Handle file uploads"""
+    if 'file' not in request.files:
+        return jsonify({"success": False, "error": "No file part"}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"success": False, "error": "No selected file"}), 400
+    
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        # Extract text and add to RAG system
+        text = extract_text_from_file(filepath)
+        if text:
+            rag_system.add_document(filename, text)
+            return jsonify({"success": True, "filename": filename})
+        else:
+            return jsonify({"success": False, "error": "Failed to extract text"}), 500
+    
+    return jsonify({"success": False, "error": "Invalid file type"}), 400
+
 
 @app.route("/")
 def index():
@@ -564,14 +454,10 @@ def index():
 
 @app.route("/sessions", methods=["GET"])
 def get_sessions():
-    # Return list of sessions sorted by creation time (newest first)
-    # For simplicity, we just return them as is or sorted if we added timestamps
-    # Let's just return a list of {id, title}
     session_list = [
         {"id": sid, "title": s["title"]} 
         for sid, s in sessions.items()
     ]
-    # Reverse to show newest first (assuming insertion order is preserved in recent python)
     return jsonify(session_list[::-1])
 
 @app.route("/new_chat", methods=["POST"])
@@ -596,6 +482,27 @@ def get_history(session_id):
         return jsonify({"error": "Session not found"}), 404
     return jsonify(sessions[session_id]["history"])
 
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        # Extract and index text immediately
+        text = extract_text_from_file(filepath)
+        rag_system.add_document(filename, text)
+        
+        return jsonify({"success": True, "filename": filename, "message": "File uploaded and indexed."})
+    
+    return jsonify({"error": "File type not allowed"}), 400
+
 @app.route("/chat", methods=["POST"])
 def chat_endpoint():
     data = request.json
@@ -605,7 +512,6 @@ def chat_endpoint():
     if not user_msg:
         return jsonify({"error": "No message provided"}), 400
 
-    # Create new session if not provided or invalid
     if not session_id or session_id not in sessions:
         session_id = str(uuid.uuid4())
         sessions[session_id] = {
@@ -616,9 +522,7 @@ def chat_endpoint():
     session = sessions[session_id]
     chat_history = session["history"]
 
-    # Update title if it's the first message
     if len(chat_history) == 0:
-        # Simple title generation: first 30 chars of message
         session["title"] = user_msg[:30] + "..." if len(user_msg) > 30 else user_msg
 
     # 1. Context & Intent Detection
@@ -627,21 +531,30 @@ def chat_endpoint():
     events_updated = False
     
     lower_msg = user_msg.lower()
-    is_reschedule = "reschedule" in lower_msg or "move" in lower_msg or "change" in lower_msg
+    is_reschedule = "reschedule" in lower_msg or "move" in lower_msg or "change" in lower_msg or "missed" in lower_msg
     
     # 2. Handle reschedule requests - fetch upcoming events to help agent
     if is_reschedule:
         tz = get_ist_tz()
         now = dt.datetime.now(tz)
-        start_search = now.isoformat()
+        # Look back 2 days for "missed" events, look forward 30 days for upcoming
+        start_search = (now - dt.timedelta(days=2)).isoformat()
         end_search = (now + dt.timedelta(days=30)).isoformat()
         list_res = list_calendar_events(start_search, end_search, max_results=50)
         
         if list_res.get("ok") and list_res.get("events"):
             context["upcoming_events"] = list_res["events"]
+            # Also specifically flag past events if user said "missed"
+            if "missed" in lower_msg:
+                past_events = [e for e in list_res["events"] if e.get("start", {}).get("dateTime") < now.isoformat()]
+                context["past_events"] = past_events
     
-    # 3. Auto-create logic (Tomorrow at X)
-    # Skip if reschedule to avoid duplicates
+    # 3. RAG Context Retrieval
+    rag_context = rag_system.retrieve_context(user_msg)
+    if rag_context:
+        context["rag_context"] = rag_context
+
+    # 4. Auto-create logic (Tomorrow at X)
     if not is_reschedule and "tomorrow" in lower_msg and ("am" in lower_msg or "pm" in lower_msg):
         auto_info = auto_create_tomorrow_event(user_msg, today_info)
         if auto_info:
@@ -653,24 +566,15 @@ def chat_endpoint():
             }
             events_updated = True
 
-    # Define now for search
-    tz = get_ist_tz()
-    now = dt.datetime.now(tz)
-    
-    # 3. Call Gemini Agent
-    # We need to pass the history and context
+    # 5. Call Gemini Agent
     agent_response = chat_with_agent(user_msg, chat_history, context)
     
-    # 4. Parse JSON from agent response for batch event creation
-    import json
-    
-    # Look for JSON blocks in the response
+    # 6. Parse JSON from agent response
     json_match = re.search(r'```json\s*(\{.*?\})\s*```', agent_response, re.DOTALL)
     if json_match:
         try:
             json_data = json.loads(json_match.group(1))
             
-            # Handle batch event creation
             if json_data.get("action") == "create_events":
                 events = json_data.get("events", [])
                 created_count = 0
@@ -692,13 +596,11 @@ def chat_endpoint():
                 
                 if created_count > 0:
                     events_updated = True
-                    # Add confirmation message
                     confirmation = f"\n\n✅ Successfully created {created_count} event(s) in your Google Calendar!"
                     if failed_count > 0:
                         confirmation += f" ({failed_count} failed)"
                     agent_response += confirmation
             
-            # Handle single event update
             elif json_data.get("action") == "update_event":
                 event_id = json_data.get("eventId")
                 start_iso = json_data.get("start_iso")
@@ -722,7 +624,6 @@ def chat_endpoint():
         except Exception as e:
             print(f"[ERROR] Error processing agent JSON: {e}")
     
-    # Update history
     chat_history.append({"role": "user", "content": user_msg})
     chat_history.append({"role": "model", "content": agent_response})
     
@@ -732,6 +633,191 @@ def chat_endpoint():
         "session_id": session_id,
         "title": session["title"]
     })
+
+@app.route("/delete_event", methods=["POST"])
+def delete_event_endpoint():
+    data = request.json
+    event_id = data.get("event_id")
+    
+    if not event_id:
+        return jsonify({"error": "No event_id provided"}), 400
+        
+    result = delete_calendar_event(event_id)
+    return jsonify(result)
+
+@app.route("/generate_quiz", methods=["POST"])
+def generate_quiz_endpoint():
+    """
+    Generate quiz questions based on mode (upload, recall, interview).
+    """
+    data = request.json
+    mode = data.get("mode")  # "upload", "recall", or "interview"
+    
+    try:
+        if mode == "upload":
+            # Quiz My Uploads mode
+            filename = data.get("filename")
+            if not filename:
+                return jsonify({"error": "No filename provided"}), 400
+            
+            # Use RAG to get context from the file
+            context = rag_system.retrieve_context(filename)
+            if not context:
+                return jsonify({"error": "File not found or no content"}), 404
+            
+            # Generate quiz prompt
+            quiz_prompt = f"""Based on the following document content, generate 5 multiple-choice questions to test understanding.
+
+Document Content:
+{context}
+
+Generate questions in this EXACT JSON format:
+```json
+{{
+    "questions": [
+        {{
+            "question": "Question text here?",
+            "options": ["Option A", "Option B", "Option C", "Option D"],
+            "correct": 0
+        }}
+    ]
+}}
+```
+
+Make the questions challenging but fair. The "correct" field should be the index (0-3) of the correct option."""
+
+            response = model.generate_content(quiz_prompt)
+            quiz_data = parse_json_from_response(response.text)
+            
+            if quiz_data:
+                return jsonify(quiz_data)
+            else:
+                return jsonify({"error": "Failed to generate quiz"}), 500
+                
+        elif mode == "recall":
+            # Daily Recall mode - get yesterday's events
+            tz = get_ist_tz()
+            yesterday = dt.datetime.now(tz) - dt.timedelta(days=1)
+            start = yesterday.replace(hour=0, minute=0, second=0).isoformat()
+            end = yesterday.replace(hour=23, minute=59, second=59).isoformat()
+            
+            events_res = list_calendar_events(start, end)
+            events = events_res.get("events", [])
+            
+            if not events:
+                return jsonify({"error": "No study sessions found for yesterday"}), 404
+            
+            topics = [e.get("summary", "") for e in events]
+            topics_str = ", ".join(topics)
+            
+            quiz_prompt = f"""You studied these topics yesterday: {topics_str}
+
+Generate 5 quick recall questions to test retention. Use this EXACT JSON format:
+```json
+{{
+    "questions": [
+        {{
+            "question": "Question text here?",
+            "options": ["Option A", "Option B", "Option C", "Option D"],
+            "correct": 0
+        }}
+    ]
+}}
+```"""
+
+            response = model.generate_content(quiz_prompt)
+            quiz_data = parse_json_from_response(response.text)
+            
+            if quiz_data:
+                quiz_data["topics"] = topics
+                return jsonify(quiz_data)
+            else:
+                return jsonify({"error": "Failed to generate quiz"}), 500
+                
+        elif mode == "interview":
+            # Mock Interview mode
+            job_role = data.get("job_role", "Software Developer")
+            
+            interview_prompt = f"""You are conducting a mock interview for the role: {job_role}
+
+Generate 3 technical/behavioral interview questions. Use this EXACT JSON format:
+```json
+{{
+    "questions": [
+        {{
+            "question": "Interview question here?",
+            "type": "open"
+        }}
+    ]
+}}
+```
+
+Make questions realistic and relevant to the role."""
+
+            response = model.generate_content(interview_prompt)
+            quiz_data = parse_json_from_response(response.text)
+            
+            if quiz_data:
+                return jsonify(quiz_data)
+            else:
+                return jsonify({"error": "Failed to generate interview questions"}), 500
+        else:
+            return jsonify({"error": "Invalid mode"}), 400
+            
+    except Exception as e:
+        print(f"[ERROR] Quiz generation failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def parse_json_from_response(text):
+    """Extract JSON from markdown code blocks."""
+    import re
+    json_match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
+    if json_match:
+        try:
+            return json.loads(json_match.group(1))
+        except:
+            return None
+    return None
+
+@app.route("/list_uploads", methods=["GET"])
+def list_uploads():
+    """List all uploaded files"""
+    files = []
+    if os.path.exists(UPLOAD_FOLDER):
+        for filename in os.listdir(UPLOAD_FOLDER):
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            if os.path.isfile(filepath):
+                files.append({
+                    "name": filename,
+                    "size": os.path.getsize(filepath)
+                })
+    return jsonify({"files": files})
+
+@app.route("/delete_file", methods=["POST"])
+def delete_file():
+    """Delete an uploaded file"""
+    data = request.json
+    filename = data.get("filename")
+    
+    if not filename:
+        return jsonify({"success": False, "error": "No filename provided"}), 400
+    
+    # Secure the filename to prevent directory traversal
+    filename = secure_filename(filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    
+    try:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            # Remove from RAG system
+            if filename in rag_system.documents:
+                del rag_system.documents[filename]
+            return jsonify({"success": True, "message": f"Deleted {filename}"})
+        else:
+            return jsonify({"success": False, "error": "File not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/events")
 def events_endpoint():
@@ -746,3 +832,4 @@ def events_endpoint():
 if __name__ == "__main__":
     print("🚀 Starting StudyCopilot Web Server on http://127.0.0.1:5000")
     app.run(host="127.0.0.1", port=5000, debug=True)
+
