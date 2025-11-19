@@ -43,7 +43,6 @@
             <div class="sidebar-section">
                 <h3><i class="fa-regular fa-clock"></i> Recent Chats</h3>
                 <div class="recent-chats-list" id="recent-chats-list">
-                    <!-- Sessions will be injected here -->
                     <div class="loading-events">Loading...</div>
                 </div>
             </div>
@@ -51,7 +50,6 @@
             <div class="sidebar-section">
                 <h3><i class="fa-regular fa-calendar"></i> Schedule</h3>
                 <div id="events-list" class="events-list">
-                    <!-- Events will be injected here -->
                     <div class="loading-events">Loading...</div>
                 </div>
             </div>
@@ -82,10 +80,116 @@
 
             <div class="chat-input-area">
                 <form id="chat-form">
+                    <input type="file" id="file-input" hidden accept=".txt,.pdf,.md">
+                    <button type="button" id="upload-btn" class="upload-btn" title="Upload Context"><i
+                            class="fa-solid fa-paperclip"></i></button>
                     <input type="text" id="user-input"
                         placeholder="Type your request... (e.g., 'Schedule a Python study session')" autocomplete="off">
                     <button type="submit"><i class="fa-solid fa-paper-plane"></i></button>
                 </form>
+            </div>
+        </main>
+
+        <!-- Tasks Area -->
+        <main class="tasks-area hidden" id="tasks-view">
+            <header class="tasks-header">
+                <div class="header-info">
+                    <h2>My Tasks</h2>
+                    <p>Stay organized & productive</p>
+                </div>
+            </header>
+
+            <div class="tasks-content">
+                <section class="task-section">
+                    <h3><i class="fa-regular fa-calendar-check"></i> Scheduled Today</h3>
+                    <div id="scheduled-tasks-list" class="task-list">
+                        <div class="empty-state">No events scheduled for today.</div>
+                    </div>
+                </section>
+
+                <section class="task-section">
+                    <h3><i class="fa-solid fa-list-ul"></i> My To-Dos</h3>
+                    <div class="add-task-form">
+                        <input type="text" id="new-task-input" placeholder="Add a new task...">
+                        <button id="add-task-btn"><i class="fa-solid fa-plus"></i></button>
+                    </div>
+                    <div id="manual-tasks-list" class="task-list"></div>
+                </section>
+            </div>
+        </main>
+
+        <!-- Quizzes Area -->
+        <main class="quizzes-area hidden" id="quizzes-view">
+            <header class="quizzes-header">
+                <div class="header-info">
+                    <h2>Quiz Hub</h2>
+                    <p>Test your knowledge</p>
+                </div>
+            </header>
+
+            <!-- Quiz Mode Selection -->
+            <div class="quiz-selection" id="quiz-selection">
+                <div class="quiz-mode-card" data-mode="upload">
+                    <div class="quiz-icon">
+                        <i class="fa-solid fa-file-lines"></i>
+                    </div>
+                    <h3>Quiz My Uploads</h3>
+                    <p>Generate questions from your uploaded documents</p>
+                    <button class="quiz-start-btn">Start Quiz</button>
+                </div>
+
+                <div class="quiz-mode-card" data-mode="recall">
+                    <div class="quiz-icon">
+                        <i class="fa-solid fa-clock-rotate-left"></i>
+                    </div>
+                    <h3>Daily Recall</h3>
+                    <p>Review what you studied yesterday</p>
+                    <button class="quiz-start-btn">Start Quiz</button>
+                </div>
+
+                <div class="quiz-mode-card" data-mode="interview">
+                    <div class="quiz-icon">
+                        <i class="fa-solid fa-user-tie"></i>
+                    </div>
+                    <h3>Mock Interview</h3>
+                    <p>Practice with AI interviewer for your dream job</p>
+                    <button class="quiz-start-btn">Start Quiz</button>
+                </div>
+            </div>
+
+            <!-- Quiz Content Area -->
+            <div class="quiz-content hidden" id="quiz-content">
+                <button class="back-to-selection" id="back-to-quiz-selection">
+                    <i class="fa-solid fa-arrow-left"></i> Back to Quiz Selection
+                </button>
+
+                <!-- Upload Quiz Mode -->
+                <div class="quiz-mode-content hidden" id="upload-quiz">
+                    <h3>Quiz My Uploads</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Upload files using the paperclip
+                        icon (📎) in the chat area</p>
+                    <div id="uploaded-files-list" class="uploaded-files-list"></div>
+                    <div id="upload-quiz-questions" class="quiz-questions hidden"></div>
+                </div>
+
+                <!-- Daily Recall Mode -->
+                <div class="quiz-mode-content hidden" id="recall-quiz">
+                    <h3>Yesterday's Topics</h3>
+                    <div id="recall-topics" class="recall-topics"></div>
+                    <div id="recall-quiz-questions" class="quiz-questions hidden"></div>
+                </div>
+
+                <!-- Mock Interview Mode -->
+                <div class="quiz-mode-content hidden" id="interview-quiz">
+                    <h3>Mock Interview Setup</h3>
+                    <div class="interview-setup">
+                        <label for="job-role">Job Role or Description:</label>
+                        <textarea id="job-role"
+                            placeholder="e.g., Frontend Developer, or paste a job description..."></textarea>
+                        <button id="start-interview-btn">Start Interview</button>
+                    </div>
+                    <div id="interview-chat" class="interview-chat hidden"></div>
+                </div>
             </div>
         </main>
     </div>

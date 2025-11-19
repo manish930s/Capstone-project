@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StudyCopilot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <i class="fa-solid fa-brain"></i>
+                <span>StudyCopilot</span>
+            </div>
+
+            <button id="new-chat-btn" class="new-chat-btn">
+                <i class="fa-solid fa-plus"></i> New Chat
+            </button>
+
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" id="nav-chat">
+                    <i class="fa-regular fa-message"></i> Chat
+                </a>
+                <a href="#" class="nav-item" id="nav-tasks">
+                    <i class="fa-solid fa-list-check"></i> Tasks
+                </a>
+                <a href="#" class="nav-item" id="nav-dashboard">
+                    <i class="fa-solid fa-chart-line"></i> Dashboard
+                </a>
+                <a href="#" class="nav-item" id="nav-quizzes">
+                    <i class="fa-solid fa-graduation-cap"></i> Quizzes
+                </a>
+            </nav>
+
+            <div class="sidebar-section">
+                <h3><i class="fa-regular fa-clock"></i> Recent Chats</h3>
+                <div class="recent-chats-list" id="recent-chats-list">
+                    <!-- Sessions will be injected here -->
+                    <div class="loading-events">Loading...</div>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3><i class="fa-regular fa-calendar"></i> Schedule</h3>
+                <div id="events-list" class="events-list">
+                    <!-- Events will be injected here -->
+                    <div class="loading-events">Loading...</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-area">
+            <header class="chat-header">
+                <div class="header-info">
+                    <h2>Study Assistant</h2>
+                    <p>AI-Powered Planner & Scheduler</p>
+                </div>
+                <div class="header-actions">
+                    <button id="refresh-calendar" title="Refresh Calendar"><i
+                            class="fa-solid fa-rotate-right"></i></button>
+                </div>
+            </header>
+
+            <div id="chat-messages" class="chat-messages">
+                <div class="message agent">
+                    <div class="avatar"><i class="fa-solid fa-robot"></i></div>
+                    <div class="content">
+                        <p>Hello Manish! I'm your StudyCopilot. I can help you plan your studies, schedule tasks, and
+                            track your progress. How can I help you today?</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <form id="chat-form">
+                    <input type="file" id="file-input" hidden accept=".txt,.pdf,.md">
+                    <button type="button" id="upload-btn" class="upload-btn" title="Upload Context"><i
+                            class="fa-solid fa-paperclip"></i></button>
+                    <input type="text" id="user-input"
+                        placeholder="Type your request... (e.g., 'Schedule a Python study session')" autocomplete="off">
+                    <button type="submit"><i class="fa-solid fa-paper-plane"></i></button>
+                </form>
+            </div>
+        </main>
+
+        <!-- Tasks Area (Hidden by default) -->
+        <main class="tasks-area hidden" id="tasks-view">
+            <header class="tasks-header">
+                <div class="header-info">
+                    <h2>My Tasks</h2>
+                    <p>Stay organized & productive</p>
+                </div>
+            </header>
+
+            <div class="tasks-content">
+                <!-- Section 1: Scheduled Events (from Calendar) -->
+                <section class="task-section">
+                    <h3><i class="fa-regular fa-calendar-check"></i> Scheduled Today</h3>
+                    <div id="scheduled-tasks-list" class="task-list">
+                        <!-- Injected via JS -->
+                        <div class="empty-state">No events scheduled for today.</div>
+                    </div>
+                </section>
+
+                <!-- Section 2: Manual To-Dos -->
+                <section class="task-section">
+                    <h3><i class="fa-solid fa-list-ul"></i> My To-Dos</h3>
+
+                    <div class="add-task-form">
+                        <input type="text" id="new-task-input" placeholder="Add a new task...">
+                        <button id="add-task-btn"><i class="fa-solid fa-plus"></i></button>
+                    </div>
+
+                    <div id="manual-tasks-list" class="task-list">
+                        <!-- Injected via JS -->
+                    </div>
+                </section>
+            </div>
+        </main>
+
+        <!-- Quizzes Area (Hidden by default) -->
+        <main class="quizzes-area hidden" id="quizzes-view">
+            <header class="quizzes-header">
+                <div class="header-info">
+                    <h2>Quiz Hub</h2>
+                    <p>Test your knowledge</p>
+                </div>
+            </header>
+
+            <!-- Quiz Mode Selection -->
+            <div class="quiz-selection" id="quiz-selection">
+                <div class="quiz-mode-card" data-mode="upload">
+                    <div class="quiz-icon">
+                        <i class="fa-solid fa-file-lines"></i>
+                    </div>
+                    <h3>Quiz My Uploads</h3>
+                    <p>Generate questions from your uploaded documents</p>
+                    <button class="quiz-start-btn">Start Quiz</button>
+                </div>
+
+                <div class="quiz-mode-card" data-mode="recall">
+                    <div class="quiz-icon">
+                        <i class="fa-solid fa-clock-rotate-left"></i>
+                    </div>
+                    <h3>Daily Recall</h3>
+                    <p>Review what you studied yesterday</p>
+                    <button class="quiz-start-btn">Start Quiz</button>
+                </div>
+
+                <div class="quiz-mode-card" data-mode="interview">
+                    <div class="quiz-icon">
+                        <i class="fa-solid fa-user-tie"></i>
+                    </div>
+                    <!DOCTYPE html>
+                    <html lang="en">
+
+                    <head>
+                        <meta charset="UTF-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <title>StudyCopilot</title>
+                        <link rel="preconnect" href="https://fonts.googleapis.com">
+                        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap"
+                            rel="stylesheet">
+                        <link rel="stylesheet" href="/static/style.css">
+                        <link rel="stylesheet"
+                            href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+                    </head>
+
+                    <body>
+                        <div class="app-container">
+                            <!-- Sidebar -->
+                            <aside class="sidebar">
+                                <div class="logo">
+                                    <i class="fa-solid fa-brain"></i>
+                                    <span>StudyCopilot</span>
+                                </div>
+
+                                <button id="new-chat-btn" class="new-chat-btn">
+                                    <i class="fa-solid fa-plus"></i> New Chat
+                                </button>
+
+                                <nav class="sidebar-nav">
+                                    <a href="#" class="nav-item active" id="nav-chat">
+                                        <i class="fa-regular fa-message"></i> Chat
+                                    </a>
+                                    <a href="#" class="nav-item" id="nav-tasks">
+                                        <i class="fa-solid fa-list-check"></i> Tasks
+                                    </a>
+                                    <a href="#" class="nav-item" id="nav-dashboard">
+                                        <i class="fa-solid fa-chart-line"></i> Dashboard
+                                    </a>
+                                    <a href="#" class="nav-item" id="nav-quizzes">
+                                        <i class="fa-solid fa-graduation-cap"></i> Quizzes
+                                    </a>
+                                </nav>
+
+                                <div class="sidebar-section">
+                                    <h3><i class="fa-regular fa-clock"></i> Recent Chats</h3>
+                                    <div class="recent-chats-list" id="recent-chats-list">
+                                        <!-- Sessions will be injected here -->
+                                        <div class="loading-events">Loading...</div>
+                                    </div>
+                                </div>
+
+                                <div class="sidebar-section">
+                                    <h3><i class="fa-regular fa-calendar"></i> Schedule</h3>
+                                    <div id="events-list" class="events-list">
+                                        <!-- Events will be injected here -->
+                                        <div class="loading-events">Loading...</div>
+                                    </div>
+                                </div>
+                            </aside>
+
+                            <!-- Main Chat Area -->
+                            <main class="chat-area">
+                                <header class="chat-header">
+                                    <div class="header-info">
+                                        <h2>Study Assistant</h2>
+                                        <p>AI-Powered Planner & Scheduler</p>
+                                    </div>
+                                    <div class="header-actions">
+                                        <button id="refresh-calendar" title="Refresh Calendar"><i
+                                                class="fa-solid fa-rotate-right"></i></button>
+                                    </div>
+                                </header>
+
+                                <div id="chat-messages" class="chat-messages">
+                                    <div class="message agent">
+                                        <div class="avatar"><i class="fa-solid fa-robot"></i></div>
+                                        <div class="content">
+                                            <p>Hello Manish! I'm your StudyCopilot. I can help you plan your studies,
+                                                schedule tasks, and
+                                                track your progress. How can I help you today?</p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="chat-input-area">
+                                    <form id="chat-form">
+                                        <input type="file" id="file-input" hidden accept=".txt,.pdf,.md">
+                                        <button type="button" id="upload-btn" class="upload-btn"
+                                            title="Upload Context"><i class="fa-solid fa-paperclip"></i></button>
+                                        <input type="text" id="user-input"
+                                            placeholder="Type your request... (e.g., 'Schedule a Python study session')"
+                                            autocomplete="off">
+                                        <button type="submit"><i class="fa-solid fa-paper-plane"></i></button>
+                                    </form>
+                                </div>
+                            </main>
+
+                            <!-- Tasks Area (Hidden by default) -->
+                            <main class="tasks-area hidden" id="tasks-view">
+                                <header class="tasks-header">
+                                    <div class="header-info">
+                                        <h2>My Tasks</h2>
+                                        <p>Stay organized & productive</p>
+                                    </div>
+                                </header>
+
+                                <div class="tasks-content">
+                                    <!-- Section 1: Scheduled Events (from Calendar) -->
+                                    <section class="task-section">
+                                        <h3><i class="fa-regular fa-calendar-check"></i> Scheduled Today</h3>
+                                        <div id="scheduled-tasks-list" class="task-list">
+                                            <!-- Injected via JS -->
+                                            <div class="empty-state">No events scheduled for today.</div>
+                                        </div>
+                                    </section>
+
+                                    <!-- Section 2: Manual To-Dos -->
+                                    <section class="task-section">
+                                        <h3><i class="fa-solid fa-list-ul"></i> My To-Dos</h3>
+
+                                        <div class="add-task-form">
+                                            <input type="text" id="new-task-input" placeholder="Add a new task...">
+                                            <button id="add-task-btn"><i class="fa-solid fa-plus"></i></button>
+                                        </div>
+
+                                        <div id="manual-tasks-list" class="task-list">
+                                            <!-- Injected via JS -->
+                                        </div>
+                                    </section>
+                                </div>
+                            </main>
+
+                            <!-- Quizzes Area (Hidden by default) -->
+                            <main class="quizzes-area hidden" id="quizzes-view">
+                                <header class="quizzes-header">
+                                    <div class="header-info">
+                                        <h2>Quiz Hub</h2>
+                                        <p>Test your knowledge</p>
+                                    </div>
+                                </header>
+
+                                <!-- Quiz Mode Selection -->
+                                <div class="quiz-selection" id="quiz-selection">
+                                    <div class="quiz-mode-card" data-mode="upload">
+                                        <div class="quiz-icon">
+                                            <i class="fa-solid fa-file-lines"></i>
+                                        </div>
+                                        <h3>Quiz My Uploads</h3>
+                                        <p>Generate questions from your uploaded documents</p>
+                                        <button class="quiz-start-btn">Start Quiz</button>
+                                    </div>
+
+                                    <div class="quiz-mode-card" data-mode="recall">
+                                        <div class="quiz-icon">
+                                            <i class="fa-solid fa-clock-rotate-left"></i>
+                                        </div>
+                                        <h3>Daily Recall</h3>
+                                        <p>Review what you studied yesterday</p>
+                                        <button class="quiz-start-btn">Start Quiz</button>
+                                    </div>
+
+                                    <div class="quiz-mode-card" data-mode="interview">
+                                        <div class="quiz-icon">
+                                            <i class="fa-solid fa-user-tie"></i>
+                                        </div>
+                                        <h3>Mock Interview</h3>
+                                        <p>Practice with AI interviewer for your dream job</p>
+                                        <button class="quiz-start-btn">Start Quiz</button>
+                                    </div>
+                                </div>
+
+                                <!-- Quiz Content Area (Hidden until mode selected) -->
+                                <div class="quiz-content hidden" id="quiz-content">
+                                    <button class="back-to-selection" id="back-to-quiz-selection">
+                                        <i class="fa-solid fa-arrow-left"></i> Back to Quiz Selection
+                                    </button>
+
+                                    <!-- Upload Quiz Mode -->
+                                    <div class="quiz-mode-content hidden" id="upload-quiz">
+                                        <h3>Select a Document</h3>
+
+                                        <!-- Upload New File Section -->
+                                        <div class="upload-section" style="margin-bottom: 2rem; text-align: center;">
+                                            <input type="file" id="quiz-file-input" accept=".pdf,.txt,.md"
+                                                style="display: none;">
+                                            <button id="upload-quiz-file-btn" class="upload-quiz-btn"
+                                                style="background: linear-gradient(135deg, var(--accent-color), #8b5cf6); color: white; border: none; padding: 1rem 2rem; border-radius: 0.75rem; cursor: pointer; font-weight: 600; font-size: 1.05rem; display: inline-flex; align-items: center; gap: 0.75rem; transition: all 0.3s;">
+                                                <i class="fa-solid fa-cloud-upload"></i> Upload New Document
+                                            </button>
+                                            <p class="upload-hint"
+                                                style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.75rem;">
+                                                Supported formats: PDF, TXT, MD</p>
+                                        </div>
+
+                                        <div id="uploaded-files-list" class="uploaded-files-list">
+                                            <!-- Injected via JS -->
+                                        </div>
+                                        <div id="upload-quiz-questions" class="quiz-questions hidden">
+                                            <!-- Questions injected via JS -->
+                                        </div>
+                                    </div>
+
+                                    <!-- Daily Recall Mode -->
+                                    <div class="quiz-mode-content hidden" id="recall-quiz">
+                                        <h3>Yesterday's Topics</h3>
+                                        <div id="recall-topics" class="recall-topics">
+                                            <!-- Topics injected via JS -->
+                                        </div>
+                                        <div id="recall-quiz-questions" class="quiz-questions hidden">
+                                            <!-- Questions injected via JS -->
+                                        </div>
+                                    </div>
+
+                                    <!-- Mock Interview Mode -->
+                                    <div class="quiz-mode-content hidden" id="interview-quiz">
+                                        <h3>Mock Interview Setup</h3>
+                                        <div class="interview-setup">
+                                            <label for="job-role">Job Role or Description:</label>
+                                            <textarea id="job-role"
+                                                placeholder="e.g., Frontend Developer, or paste a job description..."></textarea>
+                                            <button id="start-interview-btn">Start Interview</button>
+                                        </div>
+                                        <div id="interview-chat" class="interview-chat hidden">
+                                            <!-- Interview Q&A injected via JS -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </main>
+                        </div>
+
+                        <script src="/static/script.js"></script>
+                    </body>
+
+                    </html>
