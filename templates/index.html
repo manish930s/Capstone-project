@@ -52,6 +52,7 @@
                 <div id="events-list" class="events-list">
                     <div class="loading-events">Loading...</div>
                 </div>
+                <button id="refresh-calendar" title="Refresh Calendar"><i class="fa-solid fa-rotate-right"></i></button>
             </div>
         </aside>
 
@@ -61,10 +62,6 @@
                 <div class="header-info">
                     <h2>Study Assistant</h2>
                     <p>AI-Powered Planner & Scheduler</p>
-                </div>
-                <div class="header-actions">
-                    <button id="refresh-calendar" title="Refresh Calendar"><i
-                            class="fa-solid fa-rotate-right"></i></button>
                 </div>
             </header>
 
@@ -87,6 +84,86 @@
                         placeholder="Type your request... (e.g., 'Schedule a Python study session')" autocomplete="off">
                     <button type="submit"><i class="fa-solid fa-paper-plane"></i></button>
                 </form>
+            </div>
+        </main>
+
+        <!-- Dashboard Area -->
+        <main class="dashboard-area hidden" id="dashboard-view">
+            <header class="dashboard-header">
+                <div class="header-info">
+                    <h2 id="dashboard-greeting">Welcome back!</h2>
+                    <p id="dashboard-date">...</p>
+                </div>
+            </header>
+
+            <div class="dashboard-content">
+                <!-- Quick Stats -->
+                <div class="dashboard-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fa-regular fa-comments"></i></div>
+                        <div class="stat-info">
+                            <span class="stat-value" id="stat-chats">0</span>
+                            <span class="stat-label">Study Sessions</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fa-solid fa-file-lines"></i></div>
+                        <div class="stat-info">
+                            <span class="stat-value" id="stat-files">0</span>
+                            <span class="stat-label">Files Uploaded</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fa-regular fa-calendar"></i></div>
+                        <div class="stat-info">
+                            <span class="stat-value" id="stat-events">0</span>
+                            <span class="stat-label">Upcoming Events</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dashboard-split">
+                    <!-- Left Column -->
+                    <div class="dashboard-left">
+                        <!-- Knowledge Profile -->
+                        <section class="dashboard-section">
+                            <h3><i class="fa-solid fa-brain"></i> Knowledge Profile</h3>
+                            <div id="knowledge-profile" class="knowledge-profile">
+                                <div class="loading-state">Loading stats...</div>
+                            </div>
+                        </section>
+
+                        <!-- Quick Actions -->
+                        <section class="dashboard-section">
+                            <h3><i class="fa-solid fa-bolt"></i> Quick Actions</h3>
+                            <div class="quick-actions">
+                                <button class="action-btn" onclick="window.startNewChat()">
+                                    <i class="fa-solid fa-plus"></i> New Chat
+                                </button>
+                                <button class="action-btn" onclick="document.getElementById('upload-btn').click()">
+                                    <i class="fa-solid fa-upload"></i> Upload File
+                                </button>
+                                <button class="action-btn" onclick="document.getElementById('nav-quizzes').click()">
+                                    <i class="fa-solid fa-graduation-cap"></i> Take Quiz
+                                </button>
+                                <button class="action-btn" onclick="document.getElementById('nav-tasks').click()">
+                                    <i class="fa-solid fa-list-check"></i> View Tasks
+                                </button>
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Right Column -->
+                    <div class="dashboard-right">
+                        <!-- Upcoming Schedule Preview -->
+                        <section class="dashboard-section">
+                            <h3><i class="fa-regular fa-calendar-days"></i> Upcoming</h3>
+                            <div id="dashboard-events" class="dashboard-list">
+                                <div class="loading-state">Loading events...</div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
             </div>
         </main>
 
