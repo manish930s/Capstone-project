@@ -260,7 +260,7 @@ def auto_create_tomorrow_event(user_message: str, today_info: dict) -> dict | No
 # ========================
 
 SYSTEM_PROMPT = """
-You are Manish's personal Study & Career Co-Pilot.
+You are a personal Study & Career Co-Pilot.
 
 Capabilities:
 - Help plan study, AI/ML learning, Kaggle competitions, MCA exam prep.
@@ -334,8 +334,31 @@ VERY IMPORTANT:
        }
        ```
 
+   (E) Deletion:
+       If the user asks to delete an event or multiple events:
+       1. Look at [SYSTEM CONTEXT] -> 'upcoming_events' (or 'past_events') to find the event(s) matching the user's description.
+       2. Use the 'id' from those events as the 'eventId'.
+       3. If deleting a single event, use "delete_event" with "eventId".
+       4. If deleting multiple events, use "delete_events" with "eventIds" (list of strings).
+       
+       Format (Single):
+       ```json
+       {
+         "action": "delete_event",
+         "eventId": "EVENT_ID_HERE"
+       }
+       ```
+
+       Format (Multiple):
+       ```json
+       {
+         "action": "delete_events",
+         "eventIds": ["ID_1", "ID_2", "ID_3"]
+       }
+       ```
+
 4) You DO NOT directly call Python functions. They are already called outside and results are put in [CONTEXT]. 
-   EXCEPTION: For updating events or batch creating events, you use the JSON format above.
+   EXCEPTION: For updating, creating, or deleting events, you use the JSON format above.
 """
 
 
@@ -531,10 +554,11 @@ def chat_endpoint():
     events_updated = False
     
     lower_msg = user_msg.lower()
-    is_reschedule = "reschedule" in lower_msg or "move" in lower_msg or "change" in lower_msg or "missed" in lower_msg
+    # Expanded keywords to include deletion/cancellation
+    is_calendar_action = any(k in lower_msg for k in ["reschedule", "move", "change", "missed", "delete", "remove", "cancel"])
     
-    # 2. Handle reschedule requests - fetch upcoming events to help agent
-    if is_reschedule:
+    # 2. Handle calendar requests - fetch upcoming events to help agent
+    if is_calendar_action:
         tz = get_ist_tz()
         now = dt.datetime.now(tz)
         # Look back 2 days for "missed" events, look forward 30 days for upcoming
@@ -555,7 +579,7 @@ def chat_endpoint():
         context["rag_context"] = rag_context
 
     # 4. Auto-create logic (Tomorrow at X)
-    if not is_reschedule and "tomorrow" in lower_msg and ("am" in lower_msg or "pm" in lower_msg):
+    if not is_calendar_action and "tomorrow" in lower_msg and ("am" in lower_msg or "pm" in lower_msg):
         auto_info = auto_create_tomorrow_event(user_msg, today_info)
         if auto_info:
             context["auto_event_info"] = {
@@ -574,8 +598,9 @@ def chat_endpoint():
     if json_match:
         try:
             json_data = json.loads(json_match.group(1))
+            action = json_data.get("action")
             
-            if json_data.get("action") == "create_events":
+            if action == "create_events":
                 events = json_data.get("events", [])
                 created_count = 0
                 failed_count = 0
@@ -601,7 +626,7 @@ def chat_endpoint():
                         confirmation += f" ({failed_count} failed)"
                     agent_response += confirmation
             
-            elif json_data.get("action") == "update_event":
+            elif action == "update_event":
                 event_id = json_data.get("eventId")
                 start_iso = json_data.get("start_iso")
                 end_iso = json_data.get("end_iso")
@@ -618,6 +643,35 @@ def chat_endpoint():
                         agent_response += "\n\n✅ Event updated successfully!"
                     else:
                         agent_response += f"\n\n❌ Failed to update event: {result.get('error')}"
+            
+            elif action == "delete_event":
+                event_id = json_data.get("eventId")
+                if event_id:
+                    result = delete_calendar_event(event_id)
+                    if result.get("ok"):
+                        events_updated = True
+                        agent_response += "\n\n✅ Event deleted successfully!"
+                    else:
+                        agent_response += f"\n\n❌ Failed to delete event: {result.get('error')}"
+
+            elif action == "delete_events":
+                event_ids = json_data.get("eventIds", [])
+                deleted_count = 0
+                failed_count = 0
+                
+                for event_id in event_ids:
+                    result = delete_calendar_event(event_id)
+                    if result.get("ok"):
+                        deleted_count += 1
+                    else:
+                        failed_count += 1
+                
+                if deleted_count > 0:
+                    events_updated = True
+                    msg = f"\n\n✅ Successfully deleted {deleted_count} event(s)."
+                    if failed_count > 0:
+                        msg += f" ({failed_count} failed)"
+                    agent_response += msg
         
         except json.JSONDecodeError as e:
             print(f"[ERROR] Failed to parse JSON from agent response: {e}")
@@ -971,11 +1025,79 @@ def submit_quiz_result():
 def events_endpoint():
     tz = get_ist_tz()
     now = dt.datetime.now(tz)
-    start_search = now.isoformat()
+    # Start search from the beginning of today (00:00:00)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_search = today_start.isoformat()
     end_search = (now + dt.timedelta(days=7)).isoformat()
     
     list_res = list_calendar_events(start_search, end_search)
     return jsonify(list_res)
+
+@app.route("/mark_event_complete", methods=["POST"])
+def mark_event_complete():
+    data = request.json
+    event_id = data.get("event_id")
+    current_summary = data.get("summary", "")
+    
+    if not event_id:
+        return jsonify({"error": "Event ID required"}), 400
+        
+    # Toggle completion status
+    if current_summary.startswith("✅ "):
+        new_summary = current_summary[2:] # Remove checkmark
+    else:
+        new_summary = "✅ " + current_summary
+        
+    # Update the event
+    res = update_calendar_event(event_id, summary=new_summary)
+    return jsonify(res)
+
+@app.route("/delete_calendar_event", methods=["POST"])
+def delete_calendar_event_endpoint():
+    data = request.json
+    event_id = data.get("event_id")
+    
+    if not event_id:
+        return jsonify({"error": "Event ID required"}), 400
+    
+    # Delete the event using the existing delete_calendar_event function
+    res = delete_calendar_event(event_id)
+    return jsonify(res)
+
+# Manual tasks storage (in-memory)
+manual_tasks = []
+task_id_counter = 1
+
+@app.route("/manual_tasks", methods=["GET"])
+def get_manual_tasks():
+    return jsonify(manual_tasks)
+
+@app.route("/manual_tasks", methods=["POST"])
+def create_manual_task():
+    global task_id_counter
+    data = request.json
+    task = {
+        "id": task_id_counter,
+        "text": data.get("text", ""),
+        "completed": False
+    }
+    manual_tasks.append(task)
+    task_id_counter += 1
+    return jsonify(task)
+
+@app.route("/manual_tasks/<int:task_id>/toggle", methods=["PUT"])
+def toggle_manual_task(task_id):
+    for task in manual_tasks:
+        if task["id"] == task_id:
+            task["completed"] = not task["completed"]
+            return jsonify(task)
+    return jsonify({"error": "Task not found"}), 404
+
+@app.route("/manual_tasks/<int:task_id>", methods=["DELETE"])
+def delete_manual_task(task_id):
+    global manual_tasks
+    manual_tasks = [task for task in manual_tasks if task["id"] != task_id]
+    return jsonify({"ok": True})
 
 if __name__ == "__main__":
     print("🚀 Starting StudyCopilot Web Server on http://127.0.0.1:5000")
