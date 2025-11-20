@@ -769,6 +769,59 @@ Make questions realistic and relevant to the role."""
         return jsonify({"error": str(e)}), 500
 
 
+
+@app.route("/evaluate_interview", methods=["POST"])
+def evaluate_interview():
+    """Evaluate mock interview answers"""
+    data = request.json
+    qa_pairs = data.get("qa_pairs", [])
+    job_role = data.get("job_role", "Software Developer")
+    
+    if not qa_pairs:
+        return jsonify({"error": "No answers provided"}), 400
+        
+    # Construct prompt
+    qa_text = ""
+    for i, item in enumerate(qa_pairs):
+        qa_text += f"Q{i+1}: {item['question']}\nA: {item['answer']}\n\n"
+        
+    prompt = f"""You are an expert interviewer for the role of {job_role}.
+Evaluate the following candidate's answers. Provide constructive feedback, highlighting strengths and areas for improvement.
+Also provide a rating (1-10) for each answer.
+
+Interview Transcript:
+{qa_text}
+
+Provide the evaluation in this EXACT JSON format:
+```json
+{{
+    "overall_feedback": "General summary of performance...",
+    "evaluations": [
+        {{
+            "question_index": 0,
+            "rating": 8,
+            "feedback": "Specific feedback for this answer..."
+        }}
+    ]
+}}
+```"""
+
+    try:
+        response = model.generate_content(prompt)
+        eval_data = parse_json_from_response(response.text)
+        
+        if eval_data:
+            return jsonify(eval_data)
+        else:
+            # Fallback if JSON parsing fails
+            return jsonify({
+                "overall_feedback": response.text,
+                "evaluations": []
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 def parse_json_from_response(text):
     """Extract JSON from markdown code blocks."""
     import re
@@ -801,23 +854,118 @@ def delete_file():
     filename = data.get("filename")
     
     if not filename:
-        return jsonify({"success": False, "error": "No filename provided"}), 400
-    
-    # Secure the filename to prevent directory traversal
-    filename = secure_filename(filename)
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    
+        return jsonify({"error": "No filename provided"}), 400
+        
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     try:
         if os.path.exists(filepath):
             os.remove(filepath)
-            # Remove from RAG system
+            # Also remove from RAG system if possible (simple implementation: just reload or ignore)
             if filename in rag_system.documents:
                 del rag_system.documents[filename]
-            return jsonify({"success": True, "message": f"Deleted {filename}"})
+            return jsonify({"success": True})
         else:
-            return jsonify({"success": False, "error": "File not found"}), 404
+            return jsonify({"error": "File not found"}), 404
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
+
+# ========================
+# DASHBOARD & ANALYTICS
+# ========================
+
+QUIZ_HISTORY_FILE = "quiz_history.json"
+
+def load_quiz_history():
+    if os.path.exists(QUIZ_HISTORY_FILE):
+        try:
+            with open(QUIZ_HISTORY_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_quiz_history(history):
+    with open(QUIZ_HISTORY_FILE, 'w') as f:
+        json.dump(history, f, indent=2)
+
+@app.route("/dashboard_stats", methods=["GET"])
+def dashboard_stats():
+    """Aggregate stats for the dashboard"""
+    
+    # 1. Session Count
+    session_count = len(sessions)
+    
+    # 2. File Count
+    file_count = 0
+    if os.path.exists(UPLOAD_FOLDER):
+        file_count = len([f for f in os.listdir(UPLOAD_FOLDER) if allowed_file(f)])
+        
+    # 3. Upcoming Events (Next 3)
+    upcoming_events = []
+    try:
+        tz = get_ist_tz()
+        now = dt.datetime.now(tz)
+        end_search = (now + dt.timedelta(days=30)).isoformat()
+        
+        list_res = list_calendar_events(now.isoformat(), end_search, max_results=3)
+        if list_res.get("ok"):
+            upcoming_events = list_res.get("events", [])
+    except Exception as e:
+        print(f"Error fetching events for dashboard: {e}")
+
+    # 4. Knowledge Stats
+    quiz_history = load_quiz_history()
+    topic_stats = {}
+    
+    for entry in quiz_history:
+        topic = entry.get("topic", "General")
+        score = entry.get("score", 0)
+        total = entry.get("total", 1)
+        percentage = (score / total) * 100
+        
+        if topic not in topic_stats:
+            topic_stats[topic] = {"total_score": 0, "count": 0}
+        
+        topic_stats[topic]["total_score"] += percentage
+        topic_stats[topic]["count"] += 1
+        
+    knowledge_profile = []
+    for topic, data in topic_stats.items():
+        avg_score = round(data["total_score"] / data["count"])
+        knowledge_profile.append({"topic": topic, "level": avg_score})
+        
+    # Sort by level descending
+    knowledge_profile.sort(key=lambda x: x["level"], reverse=True)
+
+    return jsonify({
+        "total_chats": session_count,
+        "total_files": file_count,
+        "upcoming_events": upcoming_events,
+        "upcoming_events_count": len(upcoming_events),
+        "knowledge_profile": knowledge_profile
+    })
+
+@app.route("/submit_quiz_result", methods=["POST"])
+def submit_quiz_result():
+    """Save quiz results to history"""
+    data = request.json
+    topic = data.get("topic", "General")
+    score = data.get("score", 0)
+    total = data.get("total", 0)
+    
+    if total == 0:
+        return jsonify({"error": "Invalid total score"}), 400
+        
+    history = load_quiz_history()
+    history.append({
+        "date": dt.datetime.now().isoformat(),
+        "topic": topic,
+        "score": score,
+        "total": total
+    })
+    save_quiz_history(history)
+    
+    return jsonify({"success": True})
 
 @app.route("/events")
 def events_endpoint():
